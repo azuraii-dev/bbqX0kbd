@@ -24,6 +24,9 @@ static int hodafone_q20_switch_key_mouse_open(struct inode *inode, struct file *
 static int q20_spec_power_flag_debug_read(struct seq_file *m, void *v);
 static ssize_t q20_spec_power_flag_debug_write(struct file *filp, const char  *buff, size_t len, loff_t *data);
 static int hodafone_q20_spec_power_flag_open(struct inode *inode, struct file *file);
+static int q20_numlock_toggle_debug_read(struct seq_file *m, void *v);
+static ssize_t q20_numlock_toggle_debug_write(struct file *filp, const char  *buff, size_t len, loff_t *data);
+static int q20_numlock_toggle_open(struct inode *inode, struct file *file);
 
 static const struct proc_ops q20_switch_key_mouse_proc_ops = {
 	.proc_open  = hodafone_q20_switch_key_mouse_open,
@@ -37,6 +40,13 @@ static const struct proc_ops q20_spec_power_flag_proc_ops = {
 	.proc_read  = seq_read,
     .proc_write = q20_spec_power_flag_debug_write,
     .proc_release = single_release,
+};
+
+static const struct proc_ops q20_numlock_toggle_proc_ops = {
+	.proc_open  = q20_numlock_toggle_open,
+	.proc_read  = seq_read,
+	.proc_write = q20_numlock_toggle_debug_write,
+	.proc_release = single_release,
 };
 
 
@@ -105,6 +115,37 @@ static ssize_t q20_spec_power_flag_debug_write(struct file *filp, const char  *b
 	}else if(writebuf[0] == '1'){
 		g_bbqX0kbd_data->q20_spec_power_flag = 1;
 	} 
+	return len;
+}
+
+static int q20_numlock_toggle_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, q20_numlock_toggle_debug_read, NULL);
+}
+
+static int q20_numlock_toggle_debug_read(struct seq_file *m, void *v)
+{
+	if (g_bbqX0kbd_data)
+		seq_printf(m, "%d\n", g_bbqX0kbd_data->q20_numlock_toggle_enable);
+	return 0;
+}
+
+static ssize_t q20_numlock_toggle_debug_write(struct file *filp, const char *buff, size_t len, loff_t *data)
+{
+	unsigned char writebuf[50];
+
+	if (copy_from_user(&writebuf, buff, len))
+		return -EFAULT;
+
+	if (g_bbqX0kbd_data == NULL)
+		return -EFAULT;
+
+	if (writebuf[0] == '0') {
+		g_bbqX0kbd_data->q20_numlock_toggle_enable = 0;
+		g_bbqX0kbd_data->lockStatus &= ~NUMS_LOCK_BIT;
+	} else if (writebuf[0] == '1') {
+		g_bbqX0kbd_data->q20_numlock_toggle_enable = 1;
+	}
 	return len;
 }
 
@@ -358,31 +399,33 @@ static void bbqX0kbd_work_handler(struct work_struct *work_struct)
 				case KEY_UNKNOWN:
 					BBQX0KBD_KEYBOARD_LOG("%s Could not get Keycode for Scancode: [0x%02X]\n", __func__, fifoData[1]);
 					break;
-				case KEY_RIGHTSHIFT:
-					if (bbqX0kbd_data->modifier_keys_status & LEFT_ALT_BIT && fifoData[0] == KEY_PRESSED_STATE)
-						bbqX0kbd_data->lockStatus ^= NUMS_LOCK_BIT;
-					fallthrough;
-				case KEY_LEFTSHIFT:
-				case KEY_RIGHTALT:
-				case KEY_LEFTALT:
-				case KEY_LEFTCTRL:
-				case KEY_RIGHTCTRL:
-					if (fifoData[0] == KEY_PRESSED_STATE)
-						bbqX0kbd_data->modifier_keys_status |= bbqX0kbd_modkeys_to_bits(keycode);
-					else
-						bbqX0kbd_data->modifier_keys_status &= ~bbqX0kbd_modkeys_to_bits(keycode);
-					fallthrough;
-				default:
-					if (bbqX0kbd_data->lockStatus & NUMS_LOCK_BIT)
-						keycode = bbqX0kbd_get_num_lock_keycode(keycode);
-					else if (bbqX0kbd_data->modifier_keys_status & RIGHT_ALT_BIT)
-						keycode = bbqX0kbd_get_altgr_keycode(keycode);
+			case KEY_RIGHTSHIFT:
+				if (bbqX0kbd_data->q20_numlock_toggle_enable
+					&& bbqX0kbd_data->modifier_keys_status & LEFT_ALT_BIT
+					&& fifoData[0] == KEY_PRESSED_STATE)
+					bbqX0kbd_data->lockStatus ^= NUMS_LOCK_BIT;
+				fallthrough;
+			case KEY_LEFTSHIFT:
+			case KEY_RIGHTALT:
+			case KEY_LEFTALT:
+			case KEY_LEFTCTRL:
+			case KEY_RIGHTCTRL:
+				if (fifoData[0] == KEY_PRESSED_STATE)
+					bbqX0kbd_data->modifier_keys_status |= bbqX0kbd_modkeys_to_bits(keycode);
+				else
+					bbqX0kbd_data->modifier_keys_status &= ~bbqX0kbd_modkeys_to_bits(keycode);
+				fallthrough;
+			default:
+				if (bbqX0kbd_data->lockStatus & NUMS_LOCK_BIT)
+					keycode = bbqX0kbd_get_num_lock_keycode(keycode);
+				else if (bbqX0kbd_data->modifier_keys_status & RIGHT_ALT_BIT)
+					keycode = bbqX0kbd_get_altgr_keycode(keycode);
 #if (BBQX0KBD_TYPE == BBQ20KBD_PMOD)
-					else if (bbqX0kbd_data->modifier_keys_status & LEFT_ALT_BIT && fifoData[1] == 0x05 && (bbqX0kbd_data->q20_spec_switch_key_mouse == 0))
-						keycode = BTN_RIGHT;
+				else if (bbqX0kbd_data->modifier_keys_status & LEFT_ALT_BIT && fifoData[1] == 0x05 && (bbqX0kbd_data->q20_spec_switch_key_mouse == 0))
+					keycode = BTN_RIGHT;
 #endif
-					if (bbqX0kbd_data->modifier_keys_status & RIGHT_ALT_BIT && fifoData[0] == KEY_PRESSED_STATE)
-						bbqX0kbd_set_brightness(bbqX0kbd_data, keycode, &reportKey);
+				if (bbqX0kbd_data->modifier_keys_status & RIGHT_ALT_BIT && fifoData[0] == KEY_PRESSED_STATE)
+					bbqX0kbd_set_brightness(bbqX0kbd_data, keycode, &reportKey);
 #if (DEBUG_LEVEL & DEBUG_LEVEL_LD)
 					BBQX0KBD_KEYBOARD_LOG("%s AFTER : MODKEYS: 0x%02X LOCKKEYS: 0x%02X scancode: %d(%c) keycode: %d State: %d reportKey: %d\n", __func__, bbqX0kbd_data->modifier_keys_status, bbqX0kbd_data->lockStatus, fifoData[1], fifoData[1],  keycode, fifoData[0], reportKey);
 #endif
@@ -514,31 +557,33 @@ static void bbqX0kbd_work_fnc(struct work_struct *work_struct_ptr)
 			case KEY_UNKNOWN:
 				BBQX0KBD_KEYBOARD_LOG("%s Could not get Keycode for Scancode: [0x%02X]\n", __func__, bbqX0kbd_data->fifoData[pos][1]);
 				break;
-			case KEY_RIGHTSHIFT:
-				if (bbqX0kbd_data->modifier_keys_status & LEFT_ALT_BIT && bbqX0kbd_data->fifoData[pos][0] == KEY_PRESSED_STATE)
-					bbqX0kbd_data->lockStatus ^= NUMS_LOCK_BIT;
-				fallthrough;
-			case KEY_LEFTSHIFT:
-			case KEY_RIGHTALT:
-			case KEY_LEFTALT:
-			case KEY_LEFTCTRL:
-			case KEY_RIGHTCTRL:
-				if (bbqX0kbd_data->fifoData[pos][0] == KEY_PRESSED_STATE)
-					bbqX0kbd_data->modifier_keys_status |= bbqX0kbd_modkeys_to_bits(keycode);
-				else
-					bbqX0kbd_data->modifier_keys_status &= ~bbqX0kbd_modkeys_to_bits(keycode);
-				fallthrough;
-			default:
-				if (bbqX0kbd_data->lockStatus & NUMS_LOCK_BIT)
-					keycode = bbqX0kbd_get_num_lock_keycode(keycode);
-				else if (bbqX0kbd_data->modifier_keys_status & RIGHT_ALT_BIT)
-					keycode = bbqX0kbd_get_altgr_keycode(keycode);
+		case KEY_RIGHTSHIFT:
+			if (bbqX0kbd_data->q20_numlock_toggle_enable
+				&& bbqX0kbd_data->modifier_keys_status & LEFT_ALT_BIT
+				&& bbqX0kbd_data->fifoData[pos][0] == KEY_PRESSED_STATE)
+				bbqX0kbd_data->lockStatus ^= NUMS_LOCK_BIT;
+			fallthrough;
+		case KEY_LEFTSHIFT:
+		case KEY_RIGHTALT:
+		case KEY_LEFTALT:
+		case KEY_LEFTCTRL:
+		case KEY_RIGHTCTRL:
+			if (bbqX0kbd_data->fifoData[pos][0] == KEY_PRESSED_STATE)
+				bbqX0kbd_data->modifier_keys_status |= bbqX0kbd_modkeys_to_bits(keycode);
+			else
+				bbqX0kbd_data->modifier_keys_status &= ~bbqX0kbd_modkeys_to_bits(keycode);
+			fallthrough;
+		default:
+			if (bbqX0kbd_data->lockStatus & NUMS_LOCK_BIT)
+				keycode = bbqX0kbd_get_num_lock_keycode(keycode);
+			else if (bbqX0kbd_data->modifier_keys_status & RIGHT_ALT_BIT)
+				keycode = bbqX0kbd_get_altgr_keycode(keycode);
 #if (BBQX0KBD_TYPE == BBQ20KBD_PMOD)
-				else if (bbqX0kbd_data->modifier_keys_status & LEFT_ALT_BIT && bbqX0kbd_data->fifoData[pos][1] == 0x05 && (bbqX0kbd_data->q20_spec_switch_key_mouse == 0))
-					keycode = BTN_RIGHT;
+			else if (bbqX0kbd_data->modifier_keys_status & LEFT_ALT_BIT && bbqX0kbd_data->fifoData[pos][1] == 0x05 && (bbqX0kbd_data->q20_spec_switch_key_mouse == 0))
+				keycode = BTN_RIGHT;
 #endif
-				if (bbqX0kbd_data->modifier_keys_status & RIGHT_ALT_BIT && bbqX0kbd_data->fifoData[pos][0] == KEY_PRESSED_STATE)
-					bbqX0kbd_set_brightness(bbqX0kbd_data, keycode, &reportKey);
+			if (bbqX0kbd_data->modifier_keys_status & RIGHT_ALT_BIT && bbqX0kbd_data->fifoData[pos][0] == KEY_PRESSED_STATE)
+				bbqX0kbd_set_brightness(bbqX0kbd_data, keycode, &reportKey);
 #if (DEBUG_LEVEL & DEBUG_LEVEL_LD)
 				BBQX0KBD_KEYBOARD_LOG("%s BEFORE: MODKEYS: 0x%02X LOCKKEYS: 0x%02X scancode: %d(%c) keycode: %d State: %d reportKey: %d\n", __func__, bbqX0kbd_data->modifier_keys_status, bbqX0kbd_data->lockStatus, bbqX0kbd_data->fifoData[pos][1], bbqX0kbd_data->fifoData[pos][1], keycode, bbqX0kbd_data->fifoData[pos][0], reportKey);
 #endif
@@ -1141,7 +1186,11 @@ static int bbqX0kbd_probe(struct i2c_client *client, const struct i2c_device_id 
     {
         BBQX0KBD_KEYBOARD_LOG("proc_create q20_spec_power_flag_proc_entry    Succesfull*****\n");
     }
-    
+
+	q20_numlock_toggle_proc_entry = proc_create(Q20_NUMLOCK_TOGGLE_PROC_NAME, 0777, NULL, &q20_numlock_toggle_proc_ops);
+	if (NULL == q20_numlock_toggle_proc_entry)
+		BBQX0KBD_KEYBOARD_LOG("proc_create q20_numlock_toggle_proc_entry error\n");
+
 	device_init_wakeup(&client->dev, false);
 
 	return 0;
